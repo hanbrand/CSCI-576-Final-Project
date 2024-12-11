@@ -1,4 +1,4 @@
-venv/
-wav/
-rgbs/
-videos_540p/
+venv
+wav
+rgbs
+videos_540p
