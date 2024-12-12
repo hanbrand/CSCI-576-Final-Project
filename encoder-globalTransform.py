@@ -6,7 +6,7 @@ from scipy.ndimage import gaussian_filter
 width = 960
 height = 540
 fps = 30
-block_size = 16
+block_size = 15
 frame_size = width * height * 3
 n1 = int(sys.argv[2])  # Quantization exponent for foreground
 n2 = int(sys.argv[3])  # Quantization exponent for background
