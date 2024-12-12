@@ -85,11 +85,7 @@ def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, d
 def quantize(block, n):
     q = 2 ** n
     quant_block = (block / q).round()
-    # Choose int8 if within range, otherwise int16
-    if np.max(np.abs(quant_block)) <= 127:
-        return quant_block.astype(np.int8)
-    else:
-        return quant_block.astype(np.int16)
+    return quant_block.astype(np.int16)
 
 def process_frame(frame, segmentation):
     height, width, _ = frame.shape
