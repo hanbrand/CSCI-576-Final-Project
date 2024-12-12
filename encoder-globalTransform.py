@@ -1,12 +1,15 @@
 import cv2
 import numpy as np
+import sys
 from scipy.ndimage import gaussian_filter
 
 width = 960
 height = 540
 fps = 30
-block_size = 15
+block_size = 16
 frame_size = width * height * 3
+n1 = int(sys.argv[2])  # Quantization exponent for foreground
+n2 = int(sys.argv[3])  # Quantization exponent for background
 
 def estimate_global_transform(prev_frame_gray, curr_frame_gray):
     # Use ORB to find keypoints and descriptors
@@ -42,12 +45,12 @@ def warp_frame(prev_frame, M, width, height):
     warped = cv2.warpAffine(prev_frame, M, (width, height))
     return warped
 
-def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, diff_threshold=15):
+def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, diff_threshold):
     # Convert to gray for simpler difference measurement
     curr_gray = cv2.cvtColor(curr_frame_bgr, cv2.COLOR_BGR2GRAY)
     prev_gray_warped = cv2.cvtColor(warped_prev_bgr, cv2.COLOR_BGR2GRAY)
 
-    # You could also apply some smoothing to reduce noise
+    # Apply smoothing to reduce noise
     curr_gray = gaussian_filter(curr_gray, sigma=1)
     prev_gray_warped = gaussian_filter(prev_gray_warped, sigma=1)
 
@@ -61,21 +64,72 @@ def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, d
         for c in range(cols):
             by = r * block_size
             bx = c * block_size
+
+            # Assume border blocks are background
+            if r == 0 or r == rows - 1 or c == 0 or c == cols - 1:
+                segmented_frame[by:by+block_size, bx:bx+block_size] = (0, 255, 0)
+                continue
+
             curr_block = curr_gray[by:by+block_size, bx:bx+block_size]
             prev_block = prev_gray_warped[by:by+block_size, bx:bx+block_size]
 
-            # Compute difference
+            # Compute MAD
             mad = np.mean(np.abs(curr_block.astype(np.float32) - prev_block.astype(np.float32)))
 
             if mad < diff_threshold:
                 # Background: paint green block
                 segmented_frame[by:by+block_size, bx:bx+block_size] = (0, 255, 0)
-            # else foreground remains original
 
     return segmented_frame
 
-with open('./rgbs/WalkingMovingBackground.rgb', 'rb') as f:
+def quantize(block, n):
+    q = 2 ** n
+    quant_block = (block / q).round()
+    # Choose int8 if within range, otherwise int16
+    if np.max(np.abs(quant_block)) <= 127:
+        return quant_block.astype(np.int8)
+    else:
+        return quant_block.astype(np.int16)
+
+def process_frame(frame, segmentation):
+    height, width, _ = frame.shape
+    compressed_data = []
+
+    # Convert frame to YCrCb color space
+    frame_ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
+    channels = cv2.split(frame_ycrcb)
+
+    # Process each 8x8 block
+    for y in range(0, height, 8):
+        for x in range(0, width, 8):
+            block_type = segmentation[y:y+8, x:x+8]
+            if np.any(block_type > 0):
+                n = n1  # Foreground
+                block_flag = 1
+            else:
+                n = n2  # Background
+                block_flag = 0
+
+            coeffs = []
+            for channel in channels:
+                block = channel[y:y+8, x:x+8]
+                if block.shape != (8,8):
+                    block = cv2.copyMakeBorder(block, 0, 8 - block.shape[0], 0, 8 - block.shape[1], cv2.BORDER_CONSTANT, value=0)
+                dct_block = cv2.dct(np.float32(block) - 128)
+                quant_block = quantize(dct_block, n)
+                coeffs.extend(quant_block.flatten())
+
+            # Store block_type and quantized coefficients
+            compressed_data.append((block_flag, coeffs))
+
+    return compressed_data
+
+# Open compressed file for writing
+with open('output.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
     prev_frame_bgr = None
+
+    # Write quantization exponents n1 and n2 at the beginning
+    cmp_file.write(np.array([n1, n2], dtype=np.uint8).tobytes())
 
     while True:
         raw_frame = f.read(frame_size)
@@ -96,11 +150,20 @@ with open('./rgbs/WalkingMovingBackground.rgb', 'rb') as f:
             warped_prev_bgr = warp_frame(prev_frame_bgr, M, width, height)
 
             # Segment foreground/background using residual differences
-            segmented_frame = segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, diff_threshold=15)
+            segmented_frame = segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, 15)
 
             # Show side-by-side
             combined = np.hstack((curr_frame_bgr, segmented_frame))
             cv2.imshow('Original (Left) vs Segmented (Right)', combined)
+
+            # Process and compress the current frame
+            compressed_frame = process_frame(curr_frame_bgr, segmented_frame)
+
+            # Write compressed data
+            for block_flag, coeffs in compressed_frame:
+                cmp_file.write(np.array([block_flag], dtype=np.uint8).tobytes())
+                cmp_file.write(np.array(coeffs, dtype=np.int16).tobytes())
+
         else:
             # First frame, no segmentation, just display original twice
             cv2.imshow('Original (Left) vs Segmented (Right)', np.hstack((curr_frame_bgr, curr_frame_bgr)))
