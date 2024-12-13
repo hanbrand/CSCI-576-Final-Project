@@ -6,10 +6,14 @@ from scipy.ndimage import gaussian_filter
 width = 960
 height = 540
 fps = 30
-block_size = 15
+block_size = 16
 frame_size = width * height * 3
 n1 = int(sys.argv[2])  # Quantization exponent for foreground
 n2 = int(sys.argv[3])  # Quantization exponent for background
+
+def pad_frame(frame):
+    padded_frame = cv2.copyMakeBorder(frame, 0, 4, 0, 0, cv2.BORDER_CONSTANT, value=0)
+    return padded_frame
 
 def estimate_global_transform(prev_frame_gray, curr_frame_gray):
     # Use ORB to find keypoints and descriptors
@@ -55,7 +59,7 @@ def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, d
     prev_gray_warped = gaussian_filter(prev_gray_warped, sigma=1)
 
     h, w = curr_gray.shape
-    segmented_frame = curr_frame_bgr.copy()
+    mask = np.ones((h, w), dtype=bool)  # Initialize mask
 
     rows = h // block_size
     cols = w // block_size
@@ -65,9 +69,9 @@ def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, d
             by = r * block_size
             bx = c * block_size
 
-            # Assume border blocks are background
+            # Border blocks are background
             if r == 0 or r == rows - 1 or c == 0 or c == cols - 1:
-                segmented_frame[by:by+block_size, bx:bx+block_size] = (0, 255, 0)
+                mask[by:by+block_size, bx:bx+block_size] = False
                 continue
 
             curr_block = curr_gray[by:by+block_size, bx:bx+block_size]
@@ -77,10 +81,10 @@ def segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, d
             mad = np.mean(np.abs(curr_block.astype(np.float32) - prev_block.astype(np.float32)))
 
             if mad < diff_threshold:
-                # Background: paint green block
-                segmented_frame[by:by+block_size, bx:bx+block_size] = (0, 255, 0)
+                # Background
+                mask[by:by+block_size, bx:bx+block_size] = False
 
-    return segmented_frame
+    return mask
 
 def quantize(block, n):
     q = 2 ** n
@@ -91,11 +95,9 @@ def process_frame(frame, segmentation):
     height, width, _ = frame.shape
     compressed_data = []
 
-    # Convert frame to YCrCb color space
-    frame_ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
-    channels = cv2.split(frame_ycrcb)
+    # Process each 8x8 block in the BGR channels
+    channels = cv2.split(frame)
 
-    # Process each 8x8 block
     for y in range(0, height, 8):
         for x in range(0, width, 8):
             block_type = segmentation[y:y+8, x:x+8]
@@ -135,6 +137,9 @@ with open('output.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
         frame = np.frombuffer(raw_frame, dtype=np.uint8)
         frame = frame.reshape((height, width, 3))
         curr_frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        
+        # Pad the frame
+        curr_frame_bgr = pad_frame(curr_frame_bgr)
 
         if prev_frame_bgr is not None:
             # Estimate global transform from prev to curr
@@ -146,26 +151,31 @@ with open('output.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
             warped_prev_bgr = warp_frame(prev_frame_bgr, M, width, height)
 
             # Segment foreground/background using residual differences
-            segmented_frame = segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, 15)
+            mask = segment_foreground_background(curr_frame_bgr, warped_prev_bgr, block_size, 15)
 
-            # Show side-by-side
-            combined = np.hstack((curr_frame_bgr, segmented_frame))
-            cv2.imshow('Original (Left) vs Segmented (Right)', combined)
+            # Create masked display frame
+            masked_frame = curr_frame_bgr.copy()
+            masked_frame[~mask] = 0  # Set background pixels to black
+
+            # # DEBUGGING: Show side-by-side
+            # combined = np.hstack((curr_frame_bgr, masked_frame))
+            # cv2.imshow('Original (Left) vs Segmented (Right)', combined)
 
             # Process and compress the current frame
-            compressed_frame = process_frame(curr_frame_bgr, segmented_frame)
+            compressed_frame = process_frame(curr_frame_bgr, mask)
 
             # Write compressed data
             for block_flag, coeffs in compressed_frame:
                 cmp_file.write(np.array([block_flag], dtype=np.uint8).tobytes())
                 cmp_file.write(np.array(coeffs, dtype=np.int16).tobytes())
 
-        else:
-            # First frame, no segmentation, just display original twice
-            cv2.imshow('Original (Left) vs Segmented (Right)', np.hstack((curr_frame_bgr, curr_frame_bgr)))
+        # DEBUGGING:
+        # else:
+        #     # First frame, no segmentation, just display original twice
+        #     cv2.imshow('Original (Left) vs Segmented (Right)', np.hstack((curr_frame_bgr, curr_frame_bgr)))
 
-        if cv2.waitKey(int(1000 / fps)) & 0xFF == ord('q'):
-            break
+        # if cv2.waitKey(int(1000 / fps)) & 0xFF == ord('q'):
+        #     break
 
         prev_frame_bgr = curr_frame_bgr.copy()
 

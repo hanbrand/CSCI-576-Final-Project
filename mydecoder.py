@@ -3,7 +3,7 @@ import numpy as np
 
 # Constants
 width = 960
-height = 540
+height = 544
 fps = 30
 
 def dequantize(block, n):
@@ -11,8 +11,8 @@ def dequantize(block, n):
     return block * q
 
 def process_frame(compressed_data, n1, n2):
-    # Initialize frame in YCrCb color space
-    frame_ycrcb = np.zeros((height, width, 3), dtype=np.uint8)
+    # Initialize frame in BGR color space
+    frame_bgr = np.zeros((height, width, 3), dtype=np.uint8)
     
     block_idx = 0
     # Process each 8x8 block
@@ -29,25 +29,24 @@ def process_frame(compressed_data, n1, n2):
             # Process each channel
             for c in range(3):
                 # Get coefficients for this channel
-                channel_coeffs = coeffs[c*64:(c+1)*64].reshape(8,8)
+                channel_coeffs = coeffs[c * 64:(c + 1) * 64]
+                block = np.array(channel_coeffs).reshape(8, 8)
                 
                 # Dequantize
-                dequant_block = dequantize(channel_coeffs, n)
+                block = dequantize(block, n)
                 
-                # Inverse DCT
-                idct_block = cv2.idct(np.float32(dequant_block))
-                block = idct_block + 128
+                # Apply inverse DCT
+                block = cv2.idct(np.float32(block))
                 
-                # Clip values to valid range
-                block = np.clip(block, 0, 255).astype(np.uint8)
+                # Add back DC offset and clip to valid range
+                block = block + 128
+                block = np.clip(block, 0, 255)
                 
-                # Place block in frame
-                frame_ycrcb[y:y+8, x:x+8, c] = block
+                # Store in frame
+                frame_bgr[y:y+8, x:x+8, c] = block.astype(np.uint8)
                 
             block_idx += 1
-
-    # Convert back to BGR
-    frame_bgr = cv2.cvtColor(frame_ycrcb, cv2.COLOR_YCrCb2BGR)
+            
     return frame_bgr
 
 # Read compressed file
