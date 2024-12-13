@@ -1,4 +1,5 @@
 import cv2
+import sys
 import numpy as np
 
 # Constants
@@ -50,11 +51,10 @@ def process_frame(compressed_data, n1, n2):
     return frame_bgr
 
 # Read compressed file
-with open('output.cmp', 'rb') as cmp_file:
+with open(sys.argv[1], 'rb') as cmp_file:
     # Read quantization parameters
     n1, n2 = np.frombuffer(cmp_file.read(2), dtype=np.uint8)
     
-    frame_count = 0
     while True:
         compressed_data = []
         blocks_per_frame = (width // 8) * (height // 8)
@@ -73,12 +73,5 @@ with open('output.cmp', 'rb') as cmp_file:
             
         # Decompress frame
         frame_bgr = process_frame(compressed_data, n1, n2)
-        
-        # Display frame
-        cv2.imshow('Decoded Frame', frame_bgr)
-        frame_count += 1
-        
-        if cv2.waitKey(int(1000/fps)) & 0xFF == ord('q'):
-            break
 
 cv2.destroyAllWindows()
