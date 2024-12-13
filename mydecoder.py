@@ -1,11 +1,19 @@
 import cv2
 import sys
 import numpy as np
+import wave
+import pyaudio
+import time
+import threading
 
 # Constants
 width = 960
 height = 544
 fps = 30
+frame_duration = 1.0 / fps  # seconds per frame
+
+# Control variables
+playback_state = {"play": True, "stop": False, "step": False, "reset": False}
 
 def dequantize(block, n):
     q = 2 ** n
@@ -50,28 +58,123 @@ def process_frame(compressed_data, n1, n2):
             
     return frame_bgr
 
-# Read compressed file
-with open(sys.argv[1], 'rb') as cmp_file:
-    # Read quantization parameters
-    n1, n2 = np.frombuffer(cmp_file.read(2), dtype=np.uint8)
-    
-    while True:
-        compressed_data = []
-        blocks_per_frame = (width // 8) * (height // 8)
+def preload_frames(compressed_file):
+    frames = []
+    with open(compressed_file, 'rb') as cmp_file:
+        # Read quantization parameters
+        n1, n2 = np.frombuffer(cmp_file.read(2), dtype=np.uint8)
         
-        # Read all blocks for current frame
-        for _ in range(blocks_per_frame):
-            try:
-                block_flag = np.frombuffer(cmp_file.read(1), dtype=np.uint8)[0]
-                coeffs = np.frombuffer(cmp_file.read(64*3*2), dtype=np.int16)  # 64 coeffs * 3 channels * 2 bytes
-                compressed_data.append((block_flag, coeffs))
-            except:
-                break
-                
-        if not compressed_data:
-            break
+        while True:
+            compressed_data = []
+            blocks_per_frame = (width // 8) * (height // 8)
             
-        # Decompress frame
-        frame_bgr = process_frame(compressed_data, n1, n2)
+            # Read all blocks for current frame
+            for _ in range(blocks_per_frame):
+                try:
+                    block_flag = np.frombuffer(cmp_file.read(1), dtype=np.uint8)[0]
+                    coeffs = np.frombuffer(cmp_file.read(64*3*2), dtype=np.int16)  # 64 coeffs * 3 channels * 2 bytes
+                    compressed_data.append((block_flag, coeffs))
+                except:
+                    break
+            
+            if not compressed_data:
+                break
+            
+            # Decompress frame
+            frame_bgr = process_frame(compressed_data, n1, n2)
+            frames.append(frame_bgr)
+    
+    return frames
 
-cv2.destroyAllWindows()
+def play_audio(audio_file, stop_event):
+    wf = wave.open(audio_file, 'rb')
+    p = pyaudio.PyAudio()
+    
+    # Open audio stream
+    stream = p.open(
+        format=p.get_format_from_width(wf.getsampwidth()),
+        channels=wf.getnchannels(),
+        rate=wf.getframerate(),
+        output=True
+    )
+    
+    # Play audio
+    while not stop_event.is_set():
+        data = wf.readframes(1024)
+        if data == b'':
+            break
+        stream.write(data)
+    
+    # Cleanup
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
+
+def main():
+    global playback_state
+    
+    if len(sys.argv) < 3:
+        print("Usage: python mydecoder.py <input_video.cmp> <input_audio.wav>")
+        return
+    
+    compressed_file = sys.argv[1]
+    audio_file = sys.argv[2]
+    
+    print("Preloading frames...")
+    frames = preload_frames(compressed_file)
+    print(f"Preloaded {len(frames)} frames.")
+    
+    # Start audio playback
+    stop_event = threading.Event()
+    audio_thread = threading.Thread(target=play_audio, args=(audio_file, stop_event))
+    audio_thread.start()
+    
+    start_time = time.time()
+    current_frame = 0
+
+    while not playback_state["stop"]:
+        if playback_state["reset"]:
+            current_frame = 0
+            start_time = time.time()
+            playback_state["reset"] = False
+            continue
+
+        if current_frame >= len(frames):
+            break
+        
+        if playback_state["play"]:
+            elapsed_time = time.time() - start_time
+            expected_frame = int(elapsed_time * fps)
+            
+            # Skip or wait to synchronize
+            if current_frame < expected_frame:
+                current_frame += 1
+                continue
+            elif current_frame > expected_frame:
+                time.sleep(frame_duration * (current_frame - expected_frame))
+            
+            # Display current frame
+            cv2.imshow("A/V Player", frames[current_frame])
+            current_frame += 1
+        
+        # Handle user input
+        key = cv2.waitKey(1)
+        if key == ord('q'):  # Quit
+            playback_state["stop"] = True
+        elif key == ord('p'):  # Pause/Play toggle
+            playback_state["play"] = not playback_state["play"]
+        elif key == ord('s'):  # Step forward
+            if not playback_state["play"] and current_frame < len(frames):
+                cv2.imshow("A/V Player", frames[current_frame])
+                current_frame += 1
+        elif key == ord('r'):  # Reset
+            playback_state["reset"] = True
+
+    # Stop audio thread
+    stop_event.set()
+    audio_thread.join()
+    
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()

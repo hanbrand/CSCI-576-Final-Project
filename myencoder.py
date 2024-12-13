@@ -132,6 +132,7 @@ with open('input_video.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
     while True:
         raw_frame = f.read(frame_size)
         if not raw_frame:
+            print('End of file')
             break
 
         frame = np.frombuffer(raw_frame, dtype=np.uint8)
