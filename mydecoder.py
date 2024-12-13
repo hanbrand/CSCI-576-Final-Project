@@ -130,9 +130,9 @@ def main():
     compressed_file = sys.argv[1]
     audio_file = sys.argv[2]
 
-    print("Preloading frames...")
+    print("Decompressing frames")
     frames = preload_frames(compressed_file)
-    print(f"Preloaded {len(frames)} frames.")
+    print("Done with decompression")
 
     # Start audio playback
     stop_event = threading.Event()

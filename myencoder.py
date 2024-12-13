@@ -122,6 +122,7 @@ def process_frame(frame, segmentation):
 
     return compressed_data
 
+print('Encoding video:', sys.argv[1])
 # Open compressed file for writing
 with open('input_video.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
     prev_frame_bgr = None
@@ -132,7 +133,7 @@ with open('input_video.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
     while True:
         raw_frame = f.read(frame_size)
         if not raw_frame:
-            print('End of file')
+            print('Done encoding')
             break
 
         frame = np.frombuffer(raw_frame, dtype=np.uint8)
