@@ -123,7 +123,7 @@ def process_frame(frame, segmentation):
     return compressed_data
 
 # Open compressed file for writing
-with open('output.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
+with open('input_video.cmp', 'wb') as cmp_file, open(sys.argv[1], 'rb') as f:
     prev_frame_bgr = None
 
     # Write quantization exponents n1 and n2 at the beginning
